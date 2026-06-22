@@ -24,11 +24,9 @@ jobs:
         uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
         with:
           python-version: "3.11"
-      - name: Install dev dependencies
-        run: uv pip install --system -e ".[dev]"
       - name: Lint (ruff)
-        run: ruff check hooks tests/cts
+        run: uv run --extra dev ruff check hooks tests/cts
       - name: Format check (ruff)
-        run: ruff format --check hooks tests/cts
+        run: uv run --extra dev ruff format --check hooks tests/cts
       - name: Tests (pytest)
-        run: pytest tests/cts -n auto -q
+        run: uv run --extra dev pytest tests/cts -n auto -q
