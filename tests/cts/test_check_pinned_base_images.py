@@ -222,6 +222,17 @@ def test_main_fix_reports_unresolvable(tmp_path, monkeypatch, capsys) -> None:
     assert "could not pin" in capsys.readouterr().err
 
 
+def test_main_fix_skips_unreadable_path_without_aborting(tmp_path, monkeypatch) -> None:
+    """An unreadable path is skipped, not fatal: a readable Dockerfile in the same
+    run is still fixed."""
+    monkeypatch.setattr(mod, "resolve_digest", lambda image: _DIGEST)
+    missing = tmp_path / "nope" / "Dockerfile"  # parent absent → OSError on open
+    good = tmp_path / "Dockerfile"
+    good.write_text("FROM node:22\n")
+    assert mod.main(["--fix", str(missing), str(good)]) == 1
+    assert good.read_text() == f"FROM node:22@{_DIGEST}\n"
+
+
 @pytest.mark.parametrize(
     "image, name, tag",
     [
