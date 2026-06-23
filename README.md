@@ -39,11 +39,12 @@ lints that catch two kinds of lie a green check can hide:
 
 ### Unrelated bonus checks (Extras)
 
-| Hook                         | Failure it prevents                                                                                                    | Opt-out marker                 |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `check-symlinks`             | A tracked symlink with an absolute target (`/Users/you/...`) broke on every machine but the author’s.                  | _(none)_                       |
-| `check-unnamed-regex-groups` | A regex’s match handling went positional and brittle because a `re.*` literal used an unnamed `( )` group.             | _(use `(?P<name>...)`)_        |
-| `check-global-stdio-swap`    | Concurrent calls clobbered each other’s output because code reassigned the process-global `sys.stdout` to capture I/O. | `# allow-stdio-swap: <reason>` |
+| Hook                         | Failure it prevents                                                                                                         | Opt-out marker                                |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `check-symlinks`             | A tracked symlink with an absolute target (`/Users/you/...`) broke on every machine but the author’s.                       | _(none)_                                      |
+| `check-unnamed-regex-groups` | A regex’s match handling went positional and brittle because a `re.*` literal used an unnamed `( )` group.                  | _(use `(?P<name>...)`)_                       |
+| `check-global-stdio-swap`    | Concurrent calls clobbered each other’s output because code reassigned the process-global `sys.stdout` to capture I/O.      | `# allow-stdio-swap: <reason>`                |
+| `check-claude-model`         | A `claude-code-action` step billed Opus silently because it omitted `--model` and rode the action’s expensive default tier. | `# allow-default-model` (on the `uses:` line) |
 
 ## Usage
 
@@ -82,9 +83,31 @@ repos:
       # - id: check-symlinks
       # - id: check-unnamed-regex-groups
       # - id: check-global-stdio-swap
+      # - id: check-claude-model         # require an explicit --model on claude-code-action steps
 ```
 
 `pre-commit run --all-files` sweeps the whole repo (handy on first adoption).
+
+### Enable a whole tier with one id
+
+Tired of adding a new `- id:` every time a check ships? Enable a tier aggregate
+instead — one id runs every Python check in that tier, and a check added to the
+tier later is picked up with **no change to your config**:
+
+```yaml
+repos:
+  - repo: https://github.com/alexander-turner/ci-truth-serum
+    rev: v0.1.0 # pin to a tag
+    hooks:
+      - id: check-tier1 # all honesty + identity checks (the safe default-on set)
+      # - id: check-tier2   # all opinionated checks — assumes the decide-gate + reporter architecture
+      # - id: check-extras  # the Python extras (vendor-/style-specific)
+```
+
+`check-symlinks` is the one check not folded into an aggregate — it is a shell
+(`language: script`) hook rather than a Python module, so enable its `- id:`
+separately if you want it. Mixing a tier aggregate with individual ids is fine
+(a check just runs twice); pick whichever reads cleaner.
 
 ### Autofix (opt-in): digest-pin base images
 
