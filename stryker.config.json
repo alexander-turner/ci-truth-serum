@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "Stryker mutation testing for the self-contained JS in scripts/. The Python lints use cosmic-ray (see cosmic-ray.toml); this is the JS counterpart. Slow, so wired as a scheduled/dispatch CI job, never a required check. The CLI-entry block in assemble-changelog.mjs carries `// Stryker disable` markers (its mutants are unkillable by in-process tests), so they are excluded from the score rather than reported as survivors.",
+  "packageManager": "pnpm",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "node --test scripts/assemble-changelog.test.mjs"
+  },
+  "coverageAnalysis": "off",
+  "mutate": ["scripts/assemble-changelog.mjs"],
+  "reporters": ["clear-text", "progress"],
+  "timeoutMS": 60000,
+  "concurrency": 2
+}

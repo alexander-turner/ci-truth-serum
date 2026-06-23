@@ -1,0 +1,73 @@
+name: Mutation testing
+
+# cosmic-ray mutation testing over the lint parsers. Slow (it reruns the whole
+# offline suite once per mutant), so it runs on a weekly schedule and on demand —
+# NOT on every PR, and it is deliberately never a required status check. A
+# surviving mutant is a prompt to add a test, surfaced in the run's report and
+# uploaded artifact, not an automatic merge blocker. Because it is never required,
+# it needs no decide gate / always() reporter (the check-static-concurrency hook's
+# # static-concurrency-ok opt-out documents that intent).
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      hypothesis_profile:
+        description: Hypothesis profile for the property suites (dev = fast).
+        type: string
+        default: dev
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          # Keep in sync with .python-version / ci.yaml.
+          python-version: "3.11"
+
+      - name: Run mutation testing
+        env:
+          HYPOTHESIS_PROFILE: ${{ inputs.hypothesis_profile || 'dev' }}
+        run: uv run --extra mutation bash .github/scripts/run-mutation.sh cr-session.sqlite
+
+      - name: Upload mutation session
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: cosmic-ray-session
+          path: cr-session.sqlite
+          if-no-files-found: warn
+
+  # JS counterpart: Stryker over the self-contained scripts/assemble-changelog.mjs.
+  # Same cadence/non-required posture as the Python job above.
+  mutation-js:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Setup base environment
+        uses: ./.github/actions/setup-base-env
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Run Stryker
+        run: pnpm mutation

@@ -77,6 +77,67 @@ def test_pin_exempt_escape_hatch() -> None:
     assert _flags('# pin-exempt: see issue 1\ncurl "$u" -o f https://x\n') == []
 
 
+def test_pin_exempt_only_excuses_the_immediately_preceding_line() -> None:
+    # The exemption must sit on the line right above the download (lines[i-1]).
+    # A `pin-exempt` two lines up does NOT excuse it -- pins lines[i-1], killing
+    # the `i - 1` -> `i >> 1` / `i // 2` index mutants (which alias i-1 only for
+    # tiny i). The download here is at index 5, so a wrong index reads a blank.
+    far = (
+        "# pin-exempt: stale, two lines up\n"
+        "noop\n"
+        "noop\n"
+        "noop\n"
+        "noop\n"
+        'curl "$u" -o f https://x\n'  # line 6
+    )
+    assert _flags(far) == [6]
+    # ...and exactly one line above DOES excuse it (same download, exemption moved).
+    near = "noop\n" * 4 + "# pin-exempt: ok\n" + 'curl "$u" -o f https://x\n'
+    assert _flags(near) == []
+
+
+def test_pin_exempt_on_first_line_download_ignores_wraparound() -> None:
+    # A download on line 1 (i == 0) with `pin-exempt` only on the LAST line must
+    # still be flagged: the `i > 0` guard blocks the lines[i-1] read, so a
+    # negative index can't wrap around to the trailing exemption. Kills the
+    # `i > 0` -> `i >= 0` / `i != 0` comparison mutants.
+    text = 'curl "$u" -o f https://x\nnoop\n# pin-exempt: trailing, unrelated\n'
+    assert _flags(text) == [1]
+
+
+@pytest.mark.parametrize(
+    ("gap", "expected"),
+    [
+        (mod._WINDOW, []),  # verify on the last in-window line -> still verified
+        (mod._WINDOW + 1, [1]),  # one line past the window -> unverified
+    ],
+)
+def test_verification_window_boundary_is_exact(gap: int, expected: list[int]) -> None:
+    # Pins the exact reach of the scan window: a checksum exactly _WINDOW lines
+    # after the download counts; one line further does not. Kills the
+    # `_WINDOW` NumberReplacer and the `start + _WINDOW + 1` arithmetic/off-by-one
+    # mutants, which only change behaviour at this boundary.
+    text = 'curl "$u" -o f https://x\n' + "noop\n" * (gap - 1) + "sha256sum -c f\n"
+    assert _flags(text) == expected
+
+
+def test_same_line_download_and_verify_passes() -> None:
+    # A download verified ON ITS OWN LINE is accepted: the window scan starts at
+    # `j == start`, and the `j > start` guard must let that first line reach the
+    # _VERIFY check rather than treat the download as an immediate "next download".
+    # Kills the `j > start` -> `j >= start` mutant (which would abort at j==start,
+    # leaving every same-line-verified download wrongly flagged).
+    assert _flags('curl "$u" -o f https://x && sha256sum -c f\n') == []
+
+
+def test_comment_line_does_not_halt_the_scan() -> None:
+    # A comment / message line is skipped (continue), not a hard stop (break): a
+    # real unverified download AFTER a comment line must still be flagged. Kills
+    # the `continue` -> `break` mutants in the main scan loop.
+    text = "# just a note\ncurl -o f https://x\nrun f\n"
+    assert _flags(text) == [2]
+
+
 def test_main_wires_violations_and_message(
     tmp_path, capsys: pytest.CaptureFixture[str]
 ) -> None:
