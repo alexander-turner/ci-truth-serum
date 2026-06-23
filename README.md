@@ -134,7 +134,7 @@ registry in `hooks/run_tier.py` (e.g., `check_exit_suppression`, not
 `check-exit-suppression`).
 
 The key property is preserved: any new check added to the tier upstream still
-flows in automatically via the aggregate — you only opt out of the two you
+flows in automatically via the aggregate — you only opt out of the ones you
 deliberately scope.
 
 ### Autofix (opt-in): digest-pin base images

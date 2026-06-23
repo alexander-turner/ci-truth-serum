@@ -169,6 +169,12 @@ def test_skip_unknown_name_exits_nonzero(capsys):
     assert "unknown" in capsys.readouterr().err
 
 
+def test_skip_without_argument_exits_nonzero(capsys):
+    rc = rt.main(["1", "--skip"])
+    assert rc == 2
+    assert "requires an argument" in capsys.readouterr().err
+
+
 def _tmp_repo_with_pr_paths_violation(tmp_path: Path) -> Path:
     wf = tmp_path / ".github" / "workflows"
     wf.mkdir(parents=True)
