@@ -138,6 +138,43 @@ def test_main_rejects_missing_tier(capsys):
     assert rt.main([]) == 2
 
 
+# ── --skip ────────────────────────────────────────────────────────────────
+def test_skip_removes_named_member(tmp_path, monkeypatch):
+    # A shell file triggers both SHELL members in tier 1 (check_exit_suppression
+    # and check_stderr_suppression). Skipping one should leave the other called.
+    shell_file = tmp_path / "s.sh"
+    shell_file.write_text("#!/usr/bin/env bash\necho hi\n")
+
+    called: list[str] = []
+
+    class _Done:
+        returncode = 0
+
+    def _fake(cmd, check):
+        # cmd = [sys.executable, "-m", "hooks.<module>", ...]
+        called.append(cmd[2].removeprefix("hooks."))
+        return _Done()
+
+    monkeypatch.setattr(rt.subprocess, "run", _fake)
+    rc = rt.main(["1", "--skip", "check_exit_suppression", str(shell_file)])
+    assert rc == 0
+    assert "check_exit_suppression" not in called
+    # check_stderr_suppression is a SHELL peer that was NOT skipped
+    assert "check_stderr_suppression" in called
+
+
+def test_skip_unknown_name_exits_nonzero(capsys):
+    rc = rt.main(["1", "--skip", "check_does_not_exist"])
+    assert rc == 2
+    assert "unknown" in capsys.readouterr().err
+
+
+def test_skip_without_argument_exits_nonzero(capsys):
+    rc = rt.main(["1", "--skip"])
+    assert rc == 2
+    assert "requires an argument" in capsys.readouterr().err
+
+
 def _tmp_repo_with_pr_paths_violation(tmp_path: Path) -> Path:
     wf = tmp_path / ".github" / "workflows"
     wf.mkdir(parents=True)

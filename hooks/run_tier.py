@@ -90,11 +90,43 @@ def run_member(module: str, kind: str, files: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if not argv or argv[0] not in TIERS:
-        print(f"usage: run_tier <{'|'.join(TIERS)}> [files...]", file=sys.stderr)
+        print(
+            f"usage: run_tier <{'|'.join(TIERS)}> [--skip <check>]... [files...]",
+            file=sys.stderr,
+        )
         return 2
-    tier, files = argv[0], argv[1:]
+    tier, rest = argv[0], argv[1:]
+
+    skips: set[str] = set()
+    files: list[str] = []
+    i = 0
+    while i < len(rest):
+        if rest[i] == "--skip":
+            if i + 1 >= len(rest):
+                print("error: --skip requires an argument", file=sys.stderr)
+                return 2
+            skips.add(rest[i + 1])
+            i += 2
+        else:
+            files.append(rest[i])
+            i += 1
+
+    unknown = skips - {mod for mod, _ in TIERS[tier]}
+    if unknown:
+        print(
+            f"error: unknown check(s) for tier {tier!r}: {', '.join(sorted(unknown))}",
+            file=sys.stderr,
+        )
+        print(
+            f"  valid: {', '.join(mod for mod, _ in TIERS[tier])}",
+            file=sys.stderr,
+        )
+        return 2
+
     rc = 0
     for module, kind in TIERS[tier]:
+        if module in skips:
+            continue
         if run_member(module, kind, files):
             rc = 1
     return rc
