@@ -109,6 +109,34 @@ repos:
 separately if you want it. Mixing a tier aggregate with individual ids is fine
 (a check just runs twice); pick whichever reads cleaner.
 
+### Scope one check to specific paths
+
+Sometimes one check in a tier needs tighter file scoping than the rest (e.g.,
+`check-exit-suppression` is too strict for your `tests/` directory). Use
+`--skip <module_name>` to drop that member from the aggregate, then re-add it
+as a standalone hook with normal pre-commit `files:`/`exclude:` filters:
+
+```yaml
+- repo: https://github.com/alexander-turner/ci-truth-serum
+  rev: v0.1.0
+  hooks:
+    - id: check-tier1
+      args: [--skip, check_exit_suppression] # drop from aggregate...
+    - id: check-exit-suppression # ...then re-add with scoped filters
+      files: '^(bin/|setup\.bash$|\.devcontainer/|\.claude/hooks/)'
+      exclude: "^bin/(bench-|check-)"
+```
+
+`--skip` is repeatable — pass one `--skip <name>` pair per check to drop.
+**An unknown name is a hard error** (to catch typos that would silently
+re-include the check). Module names use underscores and match the TIERS
+registry in `hooks/run_tier.py` (e.g., `check_exit_suppression`, not
+`check-exit-suppression`).
+
+The key property is preserved: any new check added to the tier upstream still
+flows in automatically via the aggregate — you only opt out of the two you
+deliberately scope.
+
 ### Autofix (opt-in): digest-pin base images
 
 `check-pinned-base-images` can rewrite what it finds: pass `--fix` and it
