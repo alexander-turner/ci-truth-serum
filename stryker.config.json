@@ -8,6 +8,15 @@
   },
   "coverageAnalysis": "off",
   "mutate": ["scripts/assemble-changelog.mjs"],
+  "_ignore_comment": "Stryker copies the project into a sandbox; keep the Python venv, mutation artifacts, and worktrees out of it (the venv's symlinks crash the copy, and none are needed to run the JS test).",
+  "ignorePatterns": [
+    ".venv",
+    ".uv",
+    "mutants",
+    ".stryker-tmp",
+    "cr-session.sqlite",
+    "*.sqlite"
+  ],
   "reporters": ["clear-text", "progress"],
   "timeoutMS": 60000,
   "concurrency": 2
