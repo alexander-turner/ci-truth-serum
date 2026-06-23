@@ -1,0 +1,165 @@
+"""Tests for hooks/run_tier.py — the per-tier aggregate runner that lets a
+consumer enable a whole tier (check-tier1/2/extras) with one id.
+
+Two layers:
+  * a **contract** test pinning the in-code TIERS registry to the live
+    `.pre-commit-hooks.yaml` (every Python check sits in exactly the tier its
+    name prefix declares; only `check-symlinks`, a shell hook, is unaggregated),
+    so a newly added hook can't silently escape its tier; and
+  * functional tests of `matches`/`run_member`/`main` (file routing, the
+    skip-when-no-files-of-kind path, exit-code aggregation, the usage guard),
+    driven through a real subprocess against a tmp repo.
+"""
+
+from pathlib import Path
+
+import yaml
+
+from tests._helpers import REPO_ROOT, load_hook
+
+rt = load_hook("run_tier.py", "run_tier")
+
+MANIFEST = yaml.safe_load((REPO_ROOT / ".pre-commit-hooks.yaml").read_text())
+
+# Map a name-prefix (the manifest encodes the tier in `name:`) to a TIERS key.
+PREFIX_TIER = {"honesty": "1", "identity": "1", "opinionated": "2", "extra": "extras"}
+# The lone non-Python hook: a language:script shell hook, intentionally unaggregated.
+UNAGGREGATED = {"check-symlinks"}
+
+
+def _python_member_hooks() -> list[dict]:
+    """Manifest hooks that are individual Python lints (not the aggregates, not the shell hook)."""
+    return [
+        h
+        for h in MANIFEST
+        if h["entry"].startswith("python -m hooks.")
+        and not h["entry"].startswith("python -m hooks.run_tier")
+    ]
+
+
+# ── contract: registry ⇄ manifest ────────────────────────────────────────
+def test_registry_covers_every_python_hook_in_its_declared_tier():
+    registry = {(tier, mod) for tier, members in rt.TIERS.items() for mod, _ in members}
+    expected = set()
+    for hook in _python_member_hooks():
+        if hook["id"] in UNAGGREGATED:
+            continue
+        prefix = hook["name"].split(":", 1)[0]
+        module = hook["entry"].split()[-1].removeprefix("hooks.")
+        expected.add((PREFIX_TIER[prefix], module))
+    assert registry == expected
+
+
+def test_unaggregated_hook_is_the_only_non_python_member():
+    # check-symlinks must exist, be a script hook, and appear in no tier.
+    symlinks = next(h for h in MANIFEST if h["id"] == "check-symlinks")
+    assert symlinks["entry"].endswith(".sh") and symlinks["language"] == "script"
+    all_modules = {mod for members in rt.TIERS.values() for mod, _ in members}
+    assert "check_symlinks" not in all_modules
+
+
+def test_every_aggregate_id_has_a_tier():
+    aggregate_tiers = {
+        h["entry"].split()[-1]
+        for h in MANIFEST
+        if h["entry"].startswith("python -m hooks.run_tier")
+    }
+    assert aggregate_tiers == set(rt.TIERS)
+
+
+# ── matches ───────────────────────────────────────────────────────────────
+def test_matches_shell(tmp_path):
+    p = tmp_path / "s.sh"
+    p.write_text("#!/usr/bin/env bash\necho hi\n")
+    assert rt.matches(str(p), rt.SHELL) is True
+    assert rt.matches(str(p), rt.PYTHON) is False
+
+
+def test_matches_python(tmp_path):
+    p = tmp_path / "m.py"
+    p.write_text("x = 1\n")
+    assert rt.matches(str(p), rt.PYTHON) is True
+
+
+def test_matches_dockerfile(tmp_path):
+    p = tmp_path / "Dockerfile"
+    p.write_text("FROM scratch\n")
+    assert rt.matches(str(p), rt.DOCKERFILE) is True
+    assert rt.matches(str(p), rt.SHELL_OR_DOCKERFILE) is True
+
+
+def test_matches_shell_or_dockerfile_accepts_shell(tmp_path):
+    p = tmp_path / "x.bash"
+    p.write_text("#!/usr/bin/env bash\n")
+    assert rt.matches(str(p), rt.SHELL_OR_DOCKERFILE) is True
+
+
+# ── run_member ────────────────────────────────────────────────────────────
+def test_run_member_skips_content_lint_with_no_matching_files(tmp_path, monkeypatch):
+    # A python file given to a SHELL member → no shell files → skipped (rc 0),
+    # and no subprocess is spawned.
+    called = False
+
+    def _boom(*a, **k):
+        nonlocal called
+        called = True
+        raise AssertionError("subprocess should not run")
+
+    monkeypatch.setattr(rt.subprocess, "run", _boom)
+    p = tmp_path / "m.py"
+    p.write_text("x = 1\n")
+    assert rt.run_member("check_exit_suppression", rt.SHELL, [str(p)]) == 0
+    assert called is False
+
+
+def test_run_member_workflow_ignores_files_and_runs(monkeypatch):
+    captured = {}
+
+    class _Done:
+        returncode = 0
+
+    def _fake(cmd, check):
+        captured["cmd"] = cmd
+        return _Done()
+
+    monkeypatch.setattr(rt.subprocess, "run", _fake)
+    assert rt.run_member("check_pr_paths", rt.WORKFLOW, ["ignored.py"]) == 0
+    # WORKFLOW members get no file args appended — just `-m hooks.<module>`.
+    assert captured["cmd"][1:] == ["-m", "hooks.check_pr_paths"]
+
+
+# ── main ──────────────────────────────────────────────────────────────────
+def test_main_rejects_unknown_tier(capsys):
+    assert rt.main(["nope"]) == 2
+    assert "usage: run_tier" in capsys.readouterr().err
+
+
+def test_main_rejects_missing_tier(capsys):
+    assert rt.main([]) == 2
+
+
+def _tmp_repo_with_pr_paths_violation(tmp_path: Path) -> Path:
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    # A paths: filter on pull_request — a Tier 1 (check-pr-paths) violation.
+    (wf / "bad.yaml").write_text(
+        "name: x\non:\n  pull_request:\n    paths: ['src/**']\njobs: {}\n"
+    )
+    return tmp_path
+
+
+def test_main_tier1_flags_a_real_violation(tmp_path, monkeypatch):
+    # Real subprocess wiring: run_tier shells out to the installed hooks package,
+    # which self-discovers .github/workflows under cwd.
+    repo = _tmp_repo_with_pr_paths_violation(tmp_path)
+    monkeypatch.chdir(repo)
+    assert rt.main(["1"]) == 1
+
+
+def test_main_tier1_passes_on_clean_repo(tmp_path, monkeypatch):
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows" / "ok.yaml").write_text(
+        "name: x\non:\n  pull_request:\n    branches: [main]\njobs: {}\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert rt.main(["1"]) == 0

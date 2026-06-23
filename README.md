@@ -88,6 +88,27 @@ repos:
 
 `pre-commit run --all-files` sweeps the whole repo (handy on first adoption).
 
+### Enable a whole tier with one id
+
+Tired of adding a new `- id:` every time a check ships? Enable a tier aggregate
+instead — one id runs every Python check in that tier, and a check added to the
+tier later is picked up with **no change to your config**:
+
+```yaml
+repos:
+  - repo: https://github.com/alexander-turner/ci-truth-serum
+    rev: v0.1.0 # pin to a tag
+    hooks:
+      - id: check-tier1 # all honesty + identity checks (the safe default-on set)
+      # - id: check-tier2   # all opinionated checks — assumes the decide-gate + reporter architecture
+      # - id: check-extras  # the Python extras (vendor-/style-specific)
+```
+
+`check-symlinks` is the one check not folded into an aggregate — it is a shell
+(`language: script`) hook rather than a Python module, so enable its `- id:`
+separately if you want it. Mixing a tier aggregate with individual ids is fine
+(a check just runs twice); pick whichever reads cleaner.
+
 ### Autofix (opt-in): digest-pin base images
 
 `check-pinned-base-images` can rewrite what it finds: pass `--fix` and it

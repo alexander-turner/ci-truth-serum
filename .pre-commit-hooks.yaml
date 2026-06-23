@@ -9,6 +9,10 @@
 # pulls in PyYAML); the YAML lints additionally pin PyYAML under
 # `additional_dependencies` so the intent is explicit. Each entry runs the lint
 # as `python -m hooks.<module>` from the consumer's repo root.
+#
+# Prefer one whole tier? Enable a single `check-tier1` / `check-tier2` /
+# `check-extras` aggregate (bottom of this file) instead of listing each id; a
+# check added to that tier later is then picked up with no consumer change.
 
 # ───────────────────────── Tier 1 · Honesty (default-on) ─────────────────────
 - id: check-workflow-pipefail
@@ -144,3 +148,30 @@
   pass_filenames: false
   files: ^\.github/(workflows|actions)/
   types: [yaml]
+
+# ───────────────────────── Aggregates · enable a whole tier ──────────────────
+# One id runs every Python check in the tier; new checks added to the tier are
+# picked up with no consumer change. `check-symlinks` (a language:script shell
+# hook) is the one check not aggregated — enable it on its own. These have no
+# files/types filter so they always run (the workflow lints self-discover); the
+# content lints inside still receive only files of their kind.
+- id: check-tier1
+  name: "aggregate: every Tier 1 (honesty + identity) check"
+  description: Runs the default-on honesty + identity lints under one id.
+  entry: python -m hooks.run_tier 1
+  language: python
+  additional_dependencies: [PyYAML, identify]
+
+- id: check-tier2
+  name: "aggregate: every Tier 2 (opinionated) check"
+  description: Runs the opinionated required-check-shape lints under one id; assumes that architecture.
+  entry: python -m hooks.run_tier 2
+  language: python
+  additional_dependencies: [PyYAML, identify]
+
+- id: check-extras
+  name: "aggregate: every Extras (off-theme bonus) Python check"
+  description: Runs the Python extras under one id (check-symlinks, a shell hook, is enabled separately).
+  entry: python -m hooks.run_tier extras
+  language: python
+  additional_dependencies: [PyYAML, identify]
