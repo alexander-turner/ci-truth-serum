@@ -56,10 +56,40 @@ _ALLOW = "allow-exit-suppress"
 # spanning lines is analyzed whole, not mis-split mid-capture.
 _CONTINUES = re.compile(r"(?:\\|\||&&)\s*$")
 
+# The only tokens that affect substitution nesting: an escaped char (`\x`, inert —
+# so `\`` is a literal backtick and `\$` never opens `$(`), an opening `$(` / `<(`,
+# a closing `)`, or a bare backtick. Walking these instead of indexing characters
+# keeps `_inside_substitution` a plain fold with no manual offset bookkeeping.
+_SUBST_TOKEN = re.compile(r"\\.|\$\(|<\(|`|\)")
+
+
+def _inside_substitution(prefix: str) -> bool:
+    """True if PREFIX has an unclosed ``$(`` / ``<(`` / backtick — i.e. a ``|| true``
+    after it is a value capture, or the line is still mid-substitution and continues."""
+    depth = 0
+    backtick = False
+    for token in _SUBST_TOKEN.finditer(prefix):
+        tok = token.group()
+        if tok[0] == "\\":
+            continue  # escaped character — inert
+        if tok in ("$(", "<("):
+            depth += 1
+        elif tok == ")" and depth:
+            depth -= 1
+        elif tok == "`":
+            backtick = not backtick
+    return depth > 0 or backtick
+
 
 def _logical_lines(text: str) -> list[tuple[int, str]]:
     """Join continued lines into one logical line, tagged with the 1-based
-    physical line number where it STARTS."""
+    physical line number where it STARTS.
+
+    A line continues when it ends in ``\\`` / ``|`` / ``&&`` (shell line
+    continuation) OR when a command substitution it opened (``$(`` / ``<(`` /
+    backtick) is still unclosed — so a ``|| true`` on the line that *closes* a
+    multi-line ``$( … )`` capture is analyzed as part of that capture, exactly like
+    the single-line ``var=$(cmd || true)`` form, instead of as a bare suppression."""
     out: list[tuple[int, str]] = []
     pending = ""
     start = 0
@@ -67,7 +97,7 @@ def _logical_lines(text: str) -> list[tuple[int, str]]:
         if not pending:
             start = lineno
         joined = raw[:-1] if raw.endswith("\\") else raw
-        if _CONTINUES.search(raw):
+        if _CONTINUES.search(raw) or _inside_substitution(pending + joined):
             pending += joined + " "
             continue
         out.append((start, pending + raw))
@@ -75,23 +105,6 @@ def _logical_lines(text: str) -> list[tuple[int, str]]:
     if pending:
         out.append((start, pending))
     return out
-
-
-def _inside_substitution(prefix: str) -> bool:
-    """True if PREFIX (the logical line up to the `|| true`) has an unclosed
-    ``$(`` / ``<(`` / backtick — i.e. the suppressor is a value capture."""
-    depth = 0
-    i = 0
-    while i < len(prefix):
-        two = prefix[i : i + 2]
-        if two in ("$(", "<("):
-            depth += 1
-            i += 2
-            continue
-        if prefix[i] == ")" and depth:
-            depth -= 1
-        i += 1
-    return depth > 0 or prefix.count("`") % 2 == 1
 
 
 def violations(text: str) -> list[int]:

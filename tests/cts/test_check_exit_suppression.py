@@ -91,6 +91,36 @@ def test_multiline_backslash_continuation_is_joined() -> None:
     assert mod.violations(text) == []
 
 
+def test_multiline_open_paren_capture_is_not_flagged() -> None:
+    # A value capture whose `$( … )` body spans lines with NO trailing-operator
+    # continuation (the line just ends in an open `$(`). The `|| true` inside is part
+    # of the capture, exactly like the single-line `var=$(cmd || true)` form, so it
+    # must not fire. This is the case the trailing-`|`/`\` join alone missed.
+    text = "result=$(\n  some_command || true\n)\n"
+    assert mod.violations(text) == []
+
+
+def test_multiline_process_substitution_capture_is_not_flagged() -> None:
+    text = "diff <(\n  gen_a || true\n) <(gen_b)\n"
+    assert mod.violations(text) == []
+
+
+def test_suppression_after_a_closed_multiline_capture_still_fires() -> None:
+    # The substitution-aware join must END when the capture closes: a real `|| true`
+    # on a later line is still flagged, at its own physical line — the join must not
+    # swallow everything after an opening `$(`.
+    text = "out=$(\n  gen\n)\nreal_cmd || true\n"
+    assert mod.violations(text) == [4]
+
+
+def test_escaped_backtick_does_not_mask_a_real_suppression() -> None:
+    # An escaped backtick (`\``) is a literal, not a substitution delimiter, so it must
+    # not flip the backtick-parity check and hide the real `|| true` after it. Under
+    # the old `count("`") % 2` logic this suppression was silently missed.
+    text = "val=foo\\`bar ; cleanup || true\n"
+    assert mod.violations(text) == [1]
+
+
 def test_dangling_final_continuation_is_still_scanned() -> None:
     # A file ending mid-continuation (last line trails in `|`, no resolving line)
     # must still be analyzed — the suppressor on it is not silently dropped.
