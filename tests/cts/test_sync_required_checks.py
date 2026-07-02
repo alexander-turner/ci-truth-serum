@@ -74,23 +74,38 @@ def _ruleset(contexts, integration=15368):
     }
 
 
-def test_checks_rule_found_and_missing():
+def test_find_checks_rule_found_and_missing():
     rs = _ruleset(["X"])
-    assert mod._checks_rule(rs)["type"] == "required_status_checks"
-    with pytest.raises(SystemExit, match="no required_status_checks rule"):
-        mod._checks_rule({"rules": [{"type": "creation"}]})
+    assert mod._find_checks_rule(rs)["type"] == "required_status_checks"
+    # A branch ruleset with no required_status_checks rule is not an error now.
+    assert mod._find_checks_rule({"rules": [{"type": "creation"}]}) is None
 
 
-def test_current_contexts_sorted():
-    rule = mod._checks_rule(_ruleset(["Zed", "Abe"]))
+def test_new_checks_rule_shape():
+    rule = mod._new_checks_rule()
+    assert rule["type"] == "required_status_checks"
+    assert rule["parameters"] == {
+        "required_status_checks": [],
+        "strict_required_status_checks_policy": False,
+    }
+
+
+def test_current_contexts_sorted_and_missing_rule():
+    rule = mod._find_checks_rule(_ruleset(["Zed", "Abe"]))
     assert mod.current_contexts(rule) == ["Abe", "Zed"]
+    assert mod.current_contexts(None) == []
 
 
-def test_integration_id_present_and_absent():
-    assert mod._integration_id(mod._checks_rule(_ruleset(["X"], integration=99))) == 99
+def test_integration_id_present_absent_and_no_rule():
     assert (
-        mod._integration_id(mod._checks_rule(_ruleset(["X"], integration=None))) is None
+        mod._integration_id(mod._find_checks_rule(_ruleset(["X"], integration=99)))
+        == 99
     )
+    assert (
+        mod._integration_id(mod._find_checks_rule(_ruleset(["X"], integration=None)))
+        is None
+    )
+    assert mod._integration_id(None) is None
 
 
 def test_diff_lines_shows_adds_then_removes():
@@ -193,8 +208,32 @@ def test_apply_contexts_omits_integration_when_none(monkeypatch):
     monkeypatch.setattr(mod, "github_request", lambda *a, **k: {})
     rs = _ruleset(["Old"], integration=None)
     mod.apply_contexts("o/r", 42, rs, ["New"], "tok")
-    rule = mod._checks_rule(rs)
+    rule = mod._find_checks_rule(rs)
     assert rule["parameters"]["required_status_checks"] == [{"context": "New"}]
+
+
+def test_apply_contexts_bootstraps_missing_rule(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(
+        mod,
+        "github_request",
+        lambda method, url, token, body=None: sent.update(
+            method=method, url=url, body=body
+        ),
+    )
+    # Branch ruleset with a creation rule but NO required_status_checks rule.
+    rs = {"id": 42, "rules": [{"type": "creation"}]}
+    mod.apply_contexts("o/r", 42, rs, ["Gate A", "Gate B"], "tok")
+    assert sent["method"] == "PUT"
+    rules = sent["body"]["rules"]
+    assert [r["type"] for r in rules] == ["creation", "required_status_checks"]
+    created = rules[1]["parameters"]
+    assert created["strict_required_status_checks_policy"] is False
+    # No pre-existing check carried an integration_id, so new contexts omit it.
+    assert created["required_status_checks"] == [
+        {"context": "Gate A"},
+        {"context": "Gate B"},
+    ]
 
 
 # ─── main ────────────────────────────────────────────────────────────────────
@@ -293,3 +332,47 @@ def test_main_apply_mode_mutates_via_find_ruleset(monkeypatch, capsys, _workflow
         for c in put_sink[0]["rules"][1]["parameters"]["required_status_checks"]
     ]
     assert contexts == ["Gate A"]
+
+
+def test_main_apply_bootstraps_when_ruleset_has_no_checks_rule(
+    monkeypatch, capsys, _workflows
+):
+    put_sink = []
+    rc = _run_main(
+        monkeypatch,
+        ["--repo", "o/r", "--ruleset-id", "42", "--workflows-dir", str(_workflows)],
+        {"id": 42, "rules": [{"type": "creation"}]},  # no required_status_checks rule
+        put_sink=put_sink,
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "+ Gate A" in out  # created from an empty current set
+    assert "Applied: ruleset now requires 1 checks" in out
+    rules = put_sink[0]["rules"]
+    assert [r["type"] for r in rules] == ["creation", "required_status_checks"]
+    assert [c["context"] for c in rules[1]["parameters"]["required_status_checks"]] == [
+        "Gate A"
+    ]
+
+
+def test_main_check_mode_reports_drift_when_no_checks_rule(
+    monkeypatch, capsys, _workflows
+):
+    put_sink = []
+    rc = _run_main(
+        monkeypatch,
+        [
+            "--repo",
+            "o/r",
+            "--ruleset-id",
+            "42",
+            "--check",
+            "--workflows-dir",
+            str(_workflows),
+        ],
+        {"id": 42, "rules": [{"type": "creation"}]},
+        put_sink=put_sink,
+    )
+    assert rc == 1
+    assert "+ Gate A" in capsys.readouterr().out
+    assert put_sink == []  # --check never PUTs, even when bootstrapping would apply

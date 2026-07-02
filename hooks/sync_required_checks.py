@@ -10,7 +10,8 @@ reporters the hook polices), expands each one's `name:` over its own
 `strategy.matrix` into concrete check contexts (via the shared
 `required_check_contexts`, so the lint and the apply step can never read a
 different verdict from the same YAML), and rewrites the repository ruleset's
-`required_status_checks` rule to exactly that set.
+`required_status_checks` rule to exactly that set — creating that rule if the
+branch ruleset doesn't have one yet.
 
 Modes:
   --check   compute the desired set, diff it against the live ruleset, and exit
@@ -75,21 +76,49 @@ def find_branch_ruleset(repo: str, token: str) -> int:
     return branch[0]["id"]
 
 
-def _checks_rule(ruleset: dict) -> dict:
+def _find_checks_rule(ruleset: dict) -> dict | None:
+    """The ruleset's required_status_checks rule, or None if it has none.
+
+    A branch ruleset can exist with no required_status_checks rule at all (the
+    repo protects the branch but requires no checks yet). That is not an error:
+    the apply path bootstraps the rule (see `apply_contexts`), and the read/diff
+    path treats a missing rule as an empty required set.
+    """
     for rule in ruleset.get("rules", []):
         if rule.get("type") == "required_status_checks":
             return rule
-    raise SystemExit("Ruleset has no required_status_checks rule to sync.")
+    return None
 
 
-def current_contexts(rule: dict) -> list[str]:
+def _new_checks_rule() -> dict:
+    """A fresh, empty required_status_checks rule to append when the ruleset has
+    none. `strict_required_status_checks_policy` is a required parameter for the
+    rule type; false = don't force the branch up to date before merging.
+    apply_contexts fills in the contexts before the PUT."""
+    return {
+        "type": "required_status_checks",
+        "parameters": {
+            "required_status_checks": [],
+            "strict_required_status_checks_policy": False,
+        },
+    }
+
+
+def current_contexts(rule: dict | None) -> list[str]:
+    """Sorted contexts the rule already requires; [] when the ruleset has no
+    required_status_checks rule yet."""
+    if rule is None:
+        return []
     checks = rule["parameters"]["required_status_checks"]
     return sorted(c["context"] for c in checks)
 
 
-def _integration_id(rule: dict) -> int | None:
+def _integration_id(rule: dict | None) -> int | None:
     """The CI app id carried on existing checks, reused for newly-added contexts
-    so they bind to the same Actions integration rather than any provider."""
+    so they bind to the same Actions integration rather than any provider. None
+    when the rule is absent or carries no bound checks."""
+    if rule is None:
+        return None
     for check in rule["parameters"]["required_status_checks"]:
         if "integration_id" in check:
             return check["integration_id"]
@@ -100,8 +129,12 @@ def apply_contexts(
     repo: str, ruleset_id: int, ruleset: dict, want: list[str], token: str
 ) -> None:
     """PUT the ruleset so its required_status_checks equal `want` exactly,
-    preserving every other rule and each check's integration binding."""
-    rule = _checks_rule(ruleset)
+    preserving every other rule and each check's integration binding. Creates
+    the required_status_checks rule when the ruleset doesn't already have one."""
+    rule = _find_checks_rule(ruleset)
+    if rule is None:
+        rule = _new_checks_rule()
+        ruleset.setdefault("rules", []).append(rule)
     integration = _integration_id(rule)
     rebuilt = []
     for context in want:
@@ -148,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     ruleset = github_request(
         "GET", f"{API_ROOT}/repos/{args.repo}/rulesets/{ruleset_id}", token
     )
-    current = current_contexts(_checks_rule(ruleset))
+    current = current_contexts(_find_checks_rule(ruleset))
 
     if current == want:
         print(f"Required checks already in sync ({len(want)} contexts).")
